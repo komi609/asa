@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学習記録アプリ</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+* { box-sizing: border-box; }
+body { font-family: sans-serif; margin: 20px auto; padding: 0 16px; max-width: 900px; background: #f5f7fa; color: #243447; }
+h1 { text-align: center; margin-bottom: 18px; }
+.calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 10px; }
+.day { width: 100%; background: white; padding: 15px; min-height: 60px; border: 0; border-radius: 8px; cursor: pointer; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.1); font-size: 16px; }
+.day:hover { background: #dff0ff; }
+.day.recorded { background: #bde5b8; }
+.day.selected { outline: 2px solid #2684c7; }
+.week { font-weight: bold; text-align: center; padding: 8px 0; }
+.month-nav { text-align: center; margin-bottom: 10px; }
+#formArea, .summary { background: white; padding: 15px; margin-top: 20px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+input, select, button { padding: 10px; margin: 5px; font: inherit; }
+button { min-height: 44px; cursor: pointer; }
+canvas { display: block; width: 100%; max-width: 100%; background: white; margin-top: 20px; padding: 15px; border-radius: 10px; }
+#welcome { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; overflow: hidden; background: #f5c9d5; }
+#welcome[hidden], #app[hidden] { display: none; }
+#welcome img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#welcome button { position: absolute; bottom: max(24px, env(safe-area-inset-bottom)); padding: 14px 32px; border: 0; border-radius: 999px; background: #fff; color: #243447; font-weight: bold; box-shadow: 0 2px 12px rgba(0,0,0,.2); }
+@media (max-width: 520px) {
+  body { margin: 12px auto; padding: 0 10px; }
+  h1 { font-size: 1.5rem; }
+  .calendar { gap: 3px; }
+  .day { padding: 8px 2px; min-height: 44px; font-size: 14px; }
+  #formArea select, #formArea input, #formArea button { width: 100%; min-height: 44px; margin: 5px 0; }
+}
+</style>
+</head>
+<body>
+<section id="welcome" aria-label="アプリのウェルカム画面">
+  <img src="./OIP.webp" alt="アプリのウェルカムイラスト">
+  <button type="button" onclick="startApp()">はじめる</button>
+</section>
+<main id="app" hidden>
+<h1>学習記録アプリ</h1>
+<div class="month-nav">
+  <button type="button" onclick="changeMonth(-1)" aria-label="前の月">◀</button>
+  <span id="monthLabel"></span>
+  <button type="button" onclick="changeMonth(1)" aria-label="次の月">▶</button>
+</div>
+<div class="calendar" id="calendar"></div>
+<div id="formArea">
+  <h3 id="selectedDate">日付を選択してください</h3>
+  <select id="subject" aria-label="教科">
+    <option>国語</option><option>社会</option><option>数学</option>
+    <option>理科</option><option>英語</option><option>その他</option>
+  </select>
+  <input type="number" id="hours" min="0.5" step="0.5" placeholder="例：1.5" aria-label="学習時間（時間、0.5時間刻み）">
+  <button type="button" onclick="saveRecord()">保存</button>
+</div>
+<div class="summary"><h3>今月の学習時間</h3><p id="totalTime">0分</p></div>
+<canvas id="subjectChart" aria-label="教科別の学習時間"></canvas>
+</main>
+<script>
+let currentDate = new Date();
+let selectedDate = "";
+let subjectChart = null;
+const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+const subjects = ["国語", "社会", "数学", "理科", "英語", "その他"];
+
+function startApp() {
+  document.getElementById("welcome").hidden = true;
+  document.getElementById("app").hidden = false;
+}
+
+function getData() {
+  const savedData = localStorage.getItem("studyData");
+  return savedData ? JSON.parse(savedData) : {};
+}
+function saveData(data) {
+  localStorage.setItem("studyData", JSON.stringify(data));
+}
+function formatDate(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+function createCalendar() {
+  const calendar = document.getElementById("calendar");
+  const data = getData();
+  calendar.innerHTML = "";
+  weekdays.forEach((weekday) => {
+    const heading = document.createElement("div");
+    heading.className = "week";
+    heading.textContent = weekday;
+    calendar.appendChild(heading);
+  });
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+  document.getElementById("monthLabel").textContent = `${year}年 ${month + 1}月`;
+  const firstDay = new Date(year, month, 1).getDay();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  for (let i = 0; i < firstDay; i++) calendar.appendChild(document.createElement("div"));
+  for (let day = 1; day <= lastDate; day++) {
+    const dateKey = formatDate(year, month, day);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "day";
+    button.textContent = day;
+    button.setAttribute("aria-label", `${year}年${month + 1}月${day}日`);
+    if (Array.isArray(data[dateKey]) && data[dateKey].length > 0) button.classList.add("recorded");
+    if (dateKey === selectedDate) button.classList.add("selected");
+    button.addEventListener("click", () => selectDate(dateKey));
+    calendar.appendChild(button);
+  }
+  updateSummary();
+}
+function selectDate(dateKey) {
+  selectedDate = dateKey;
+  document.getElementById("selectedDate").textContent = `${dateKey.replaceAll("-", "/")} の学習記録`;
+  createCalendar();
+}
+function changeMonth(amount) {
+  currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + amount, 1);
+  selectedDate = "";
+  document.getElementById("selectedDate").textContent = "日付を選択してください";
+  createCalendar();
+}
+function saveRecord() {
+  if (!selectedDate) { alert("先にカレンダーから日付を選択してください。"); return; }
+  const hours = Number(document.getElementById("hours").value);
+  if (!Number.isFinite(hours) || hours < 0.5 || !Number.isInteger(hours * 2)) {
+    alert("学習時間は0.5時間刻みで入力してください。");
+    return;
+  }
+  const minutes = hours * 60;
+  const subject = document.getElementById("subject").value;
+  const data = getData();
+  if (!Array.isArray(data[selectedDate])) data[selectedDate] = [];
+  const existingRecord = data[selectedDate].find((record) => record.subject === subject);
+  if (existingRecord) existingRecord.minutes = minutes;
+  else data[selectedDate].push({ subject, minutes });
+  try { saveData(data); }
+  catch (error) { alert("記録を保存できませんでした。ブラウザーの保存容量を確認してください。"); return; }
+  document.getElementById("hours").value = "";
+  createCalendar();
+}
+function updateSummary() {
+  const data = getData();
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+  const totalsBySubject = Object.fromEntries(subjects.map((subject) => [subject, 0]));
+  let totalMinutes = 0;
+  Object.entries(data).forEach(([dateKey, records]) => {
+    const [recordYear, recordMonth] = dateKey.split("-").map(Number);
+    if (recordYear !== year || recordMonth !== month + 1 || !Array.isArray(records)) return;
+    records.forEach((record) => {
+      if (subjects.includes(record.subject) && Number.isFinite(Number(record.minutes))) {
+        const minutes = Number(record.minutes);
+        totalMinutes += minutes;
+        totalsBySubject[record.subject] += minutes;
+      }
+    });
+  });
+  document.getElementById("totalTime").textContent = `${(totalMinutes / 60).toFixed(1).replace(/\.0$/, "")}時間`;
+  if (typeof Chart === "undefined") return;
+  const chartData = {
+    labels: subjects,
+    datasets: [{ label: "学習時間（時間）", data: subjects.map((subject) => totalsBySubject[subject] / 60),
+      backgroundColor: ["#77b5e8", "#f0a36e", "#8ac28a", "#e5c85c", "#b49add", "#aaa"] }]
+  };
+  if (subjectChart) { subjectChart.data = chartData; subjectChart.update(); }
+  else {
+    subjectChart = new Chart(document.getElementById("subjectChart"), {
+      type: "bar", data: chartData,
+      options: { responsive: true, scales: { y: { beginAtZero: true, title: { display: true, text: "学習時間（時間）" } } } }
+    });
+  }
+}
+createCalendar();
+</script>
+</body>
+</html>
